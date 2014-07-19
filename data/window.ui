@@ -91,9 +91,23 @@
             <property name="visible">True</property>
             <property name="can_focus">False</property>
             <property name="icon-size">1</property>
-            <property name="icon-name">go-previous-symbolic</property>
           </object>
         </child>
+      </object>
+      <packing>
+        <property name="pack_type">start</property>
+      </packing>
+    </child>
+    <child>
+      <object class="GtkMenuButton" id="places-button">
+        <property name="visible">True</property>
+        <property name="can_focus">True</property>
+        <property name="label" translatable="yes">Places</property>
+        <property name="use-popover">True</property>
+        <property name="valign">center</property>
+        <style>
+          <class name="text-button"/>
+        </style>
       </object>
       <packing>
         <property name="pack_type">start</property>

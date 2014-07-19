@@ -62,7 +62,11 @@ const WorldModel = new Lang.Class({
     Name: 'WorldModel',
     Extends: Gtk.ListStore,
     Signals: {
-        'updated': { param_types: [ GWeather.Info ] }
+        'updated': { param_types: [ GWeather.Info ] },
+        'no-locations': { param_types: [ Boolean ] },
+        'no-cityview': { param_types: [] },
+        'show-info': { param_types: [ GWeather.Info ] },
+        'current-location-changed': { param_types: [ Boolean ] }
     },
     Properties: {
         'loading': GObject.ParamSpec.boolean('loading', '', '', GObject.ParamFlags.READABLE, false)
@@ -75,26 +79,112 @@ const WorldModel = new Lang.Class({
 
         this._settings = Util.getSettings('org.gnome.Weather.Application');
 
-        let provider_override = GLib.getenv('GWEATHER_DEBUG_BACKEND');
-        if (provider_override) {
-            this._providers = GWeather.Provider.METAR | GWeather.Provider[provider_override];
-        } else {
-            this._providers = GWeather.Provider.METAR | GWeather.Provider.YR_NO |
-                GWeather.Provider.OWM;
-        }
+        this._providers = Util.getEnabledProviders();
 
         this._loadingCount = 0;
 
-        let locations = this._settings.get_value('locations').deep_unpack();
-        for (let i = 0; i < locations.length; i++) {
-            let variant = locations[i];
-            let location = this._world.deserialize(variant);
-            this._addLocationInternal(location, false);
-        }
-
-        this._settings.connect('changed::locations', Lang.bind(this, this._onChanged));
+        this._infoList = [];
 
         this._enableGtk = enableGtk;
+
+        this._settings.connect('changed::current-location', Lang.bind(this, this._currentLocationChanged));
+
+        this._currentLocationInfo = null;
+
+        this._currentlyLoadedInfo = null;
+    },
+
+    _currentLocationChanged: function() {
+        let location = this._settings.get_value('current-location').deep_unpack();
+        if (location) {
+            location = this._world.deserialize(location);
+
+            this._newCurrentLocationInfo = new GWeather.Info({ location: location,
+                                                            enabled_providers: this._providers });
+            if (this._currentLocationInfo) {
+                if (!this._currentLocationInfo.location.equal(location)) {
+                    this._newCurrentLocationInfo.connect('updated', Lang.bind(this, function(info) {
+                        this._updateLoadingCount(-1);
+                        this.emit('updated', this._newCurrentLocationInfo);
+                    }));
+                    this.updateInfo(this._newCurrentLocationInfo);
+                    this._currentLocationInfo = this._newCurrentLocationInfo;
+                }
+            } else {
+                this._newCurrentLocationInfo.connect('updated', Lang.bind(this, function(info) {
+                    this._updateLoadingCount(-1);
+                    this.emit('updated', this._newCurrentLocationInfo);
+                }));
+                this.updateInfo(this._newCurrentLocationInfo);
+                this._currentLocationInfo = this._newCurrentLocationInfo;
+            }
+            this.emit('current-location-changed', this._currentlyLoadedInfo && this._currentlyLoadedInfo.location.equal(location));
+        }
+    },
+
+    rowActivated: function(listbox, row) {
+        let children = row.get_children();
+        let grid = children[0];
+        let gridChildren = children[0].get_children();
+        this.emit('show-info', this._infoList[gridChildren[1].get_label()]);
+        this._currentlyLoadedInfo = this._infoList[gridChildren[1].get_label()];
+    },
+
+    showRecent: function(listbox) {
+        let row = listbox.get_row_at_index(0);
+        if (row) {
+            this.rowActivated(null, row);
+            return;
+        }
+    },
+
+    showCurrentLocation: function() {
+        if (this._currentLocationInfo) {
+            this.emit('show-info', this._currentLocationInfo);
+            this._currentlyLoadedInfo = this._currentLocationInfo;
+        }
+    },
+
+    fillListbox: function (listbox) {
+        let locations = this._settings.get_value('locations').deep_unpack();
+        if (locations.length == 0) {
+            this.emit('no-locations', true);
+        } else {
+            this.emit('no-locations', false);
+            for (let i = 0; i < locations.length && i < 5; i++) {
+                let variant = locations[i];
+                let location = this._world.deserialize(variant);
+                this._addLocationInternalNew(location, listbox);
+            }
+        }
+    },
+
+    fillCityView: function() {
+        let locations = this._settings.get_value('locations').deep_unpack();
+
+        let location = this._settings.get_value('current-location').deep_unpack();
+
+        if (location) {
+            location = this._world.deserialize(location);
+            this._currentLocationInfo = new GWeather.Info({ location: location,
+                                                            enabled_providers: this._providers });
+            this._currentLocationInfo = this._currentLocationInfo;
+            this._currentLocationInfo.connect('updated', Lang.bind(this, function(info) {
+                this._updateLoadingCount(-1);
+                this.emit('updated', this._currentLocationInfo);
+            }));
+            this.updateInfo(this._currentLocationInfo);
+
+            this.emit('show-info', this._currentLocationInfo);
+            this._currentlyLoadedInfo = this._currentLocationInfo;
+        } else if (locations.length > 0) {
+            let variant = locations[locations.length-1];
+            let location = this._world.deserialize(variant);
+            this.emit('show-info', this._infoList[location.get_city_name()]);
+            this._currentlyLoadedInfo = this._infoList[location.get_city_name()];
+        } else {
+            this.emit('no-cityview');
+        }
     },
 
     _updateLoadingCount: function(delta) {
@@ -153,50 +243,83 @@ const WorldModel = new Lang.Class({
         }
     },
 
-    _onChanged: function() {
-        let newLocations = this._settings.get_value('locations').deep_unpack();
-        let toErase = [];
+    _addLocationInternalNew: function(location, listbox) {
+        let grid = new Gtk.Grid({ orientation: Gtk.Orientation.HORIZONTAL,
+                                  column_spacing: 15,
+                                  margin_top: 6,
+                                  margin_bottom: 6,
+                                  column_homogeneous: true });
 
-        let [ok, iter] = this.get_iter_first();
-        while (ok) {
-            let auto = this.get_value(iter, Columns.AUTOMATIC);
-            if (auto) {
-                ok = this.iter_next(iter);
-                continue;
-            }
-            let location = this.get_value(iter, Columns.LOCATION);
+        let name = location.get_city_name();
+        let locationLabel = new Gtk.Label({ label: name,
+                                       use_markup: true,
+                                       halign: Gtk.Align.START,
+                                       visible: true });
+        grid.attach(locationLabel, 0, 0, 1, 1);
 
-            let found = false;
-            for (let j = 0; j < newLocations.length; j++) {
-                let variant = newLocations[j];
-                if (variant == null)
-                    continue;
+        let conditionGrid = new Gtk.Grid({ orientation: Gtk.Orientation.HORIZONTAL,
+                                           column_spacing: 1,
+                                           column_homogeneous: true });
 
-                let newLocation = this._world.deserialize(variant);
+        let tempLabel = new Gtk.Label({ use_markup: true,
+                                        halign: Gtk.Align.END,
+                                        visible: true });
+        conditionGrid.attach(tempLabel, 0, 0, 1, 1);
 
+        let image = new Gtk.Image({ icon_size: Gtk.IconSize.LARGE_TOOLBAR,
+                                    use_fallback: true,
+                                    halign: Gtk.Align.END,
+                                    visible: true });
+        conditionGrid.attach(image, 1, 0, 1, 1);
+
+        conditionGrid.show();
+        grid.attach(conditionGrid, 1, 0, 1, 1);
+
+        grid.show();
+        listbox.prepend(grid);
+
+        let info = new GWeather.Info({ location: location,
+                                       enabled_providers: this._providers });
+        this._infoList[locationLabel.get_label()] = info;
+
+        info.connect('updated', Lang.bind(this, function(info) {
+            tempLabel.label = info.get_temp_summary();
+            image.icon_name = info.get_symbolic_icon_name();
+
+            this._updateLoadingCount(-1);
+            this.emit('updated', info);
+        }));
+        this.updateInfo(info);
+    },
+
+    addNewLocation: function(entry, listbox) {
+        let newLocation = entry.location;
+        if (newLocation) {
+            let locations = this._settings.get_value('locations').deep_unpack();
+            for (let i = 0; i < locations.length; i++) {
+                let location = this._world.deserialize(locations[i]);
                 if (location.equal(newLocation)) {
-                    newLocations[j] = null;
-                    found = true;
-                    break;
+                    this.emit('show-info', this._infoList[location.get_city_name()]);
+                    this._currentlyLoadedInfo = this._infoList[location.get_city_name()];
+                    entry.location = null;
+                    return;
                 }
             }
 
-            if (!found)
-                toErase.push(iter.copy());
+            locations.push(newLocation.serialize());
 
-            ok = this.iter_next(iter);
-        }
+            if (locations.length > 5) {
+                locations.splice(0, 1);
+                let children = listbox.get_children();
+                children[children.length-1].destroy();
+            }
 
-        for (let i = 0; i < toErase.length; i++)
-            this.remove(toErase[i]);
-
-        for (let i = 0; i < newLocations.length; i++) {
-            let variant = newLocations[i];
-            if (variant == null)
-                continue;
-
-            let newLocation = this._world.deserialize(variant);
-            this._addLocationInternal(newLocation, false);
+            this._settings.set_value('locations', new GLib.Variant('av', locations));
+            this._addLocationInternalNew(newLocation, listbox);
+            this.emit('no-locations', false);
+            this.emit('show-info', this._infoList[newLocation.get_city_name()]);
+            this._currentlyLoadedInfo = this._infoList[newLocation.get_city_name()];
+            entry.location = null;
         }
     },
 
@@ -283,66 +406,88 @@ const WorldIconView = new Lang.Class({
 
 const WorldContentView = new Lang.Class({
     Name: 'WorldContentView',
-    Extends: Gtk.Bin,
+    Extends: Gtk.Popover,
     Properties: { 'empty': GObject.ParamSpec.boolean('empty', '', '', GObject.ParamFlags.READABLE, false) },
 
     _init: function(model, params) {
-        params = Params.fill(params, { hexpand: true, vexpand: true,
-                                       halign: Gtk.Align.FILL, valign: Gtk.Align.FILL });
+        params = Params.fill(params, { hexpand: false, vexpand: false });
         this.parent(params);
+
         this.get_accessible().accessible_name = _("World view");
 
-        this.iconView = new WorldIconView({ model: model, visible: true });
+        let builder = new Gtk.Builder();
+        builder.add_from_resource('/org/gnome/Weather/Application/places-popover.ui');
 
-        this._placeHolder = new Gtk.Grid({ halign: Gtk.Align.CENTER,
-                                           valign: Gtk.Align.CENTER,
-                                           name: 'weather-page-placeholder',
-                                           column_spacing: 6 });
-        this._placeHolder.get_style_context().add_class('dim-label');
+        let grid = builder.get_object('popover-grid');
+        this.add(grid);
 
-        let iconGrid = new Gtk.Grid({ row_spacing: 4, column_spacing: 4,
-                                      valign: Gtk.Align.CENTER });
-        iconGrid.attach(new Gtk.Image({ icon_name: 'weather-overcast-symbolic',
-                                        icon_size: Gtk.IconSize.LARGE_TOOLBAR }),
-                        0, 0, 1, 1);
-        iconGrid.attach(new Gtk.Image({ icon_name: 'weather-few-clouds-symbolic',
-                                        icon_size: Gtk.IconSize.LARGE_TOOLBAR }),
-                        1, 0, 1, 1);
-        iconGrid.attach(new Gtk.Image({ icon_name: 'weather-clear-symbolic',
-                                        icon_size: Gtk.IconSize.LARGE_TOOLBAR }),
-                        0, 1, 1, 1);
-        iconGrid.attach(new Gtk.Image({ icon_name: 'weather-showers-symbolic',
-                                        icon_size: Gtk.IconSize.LARGE_TOOLBAR }),
-                        1, 1, 1, 1);
+        this.initialGrid = builder.get_object('initial-grid');
 
-        this._placeHolder.attach(iconGrid, 0, 0, 1, 2);
-
-        this._placeHolder.attach(new Gtk.Label({ name: 'weather-page-placeholder-title',
-                                                 label: _("Add locations"),
-                                                 xalign: 0.0 }),
-                                 1, 0, 1, 1);
-        this._placeHolder.attach(new Gtk.Label({ label: _("Use the <b>New</b> button on the toolbar to add more world locations"),
-                                                 use_markup: true,
-                                                 max_width_chars: 30,
-                                                 wrap: true,
-                                                 xalign: 0.0,
-                                                 halign: Gtk.Align.START,
-                                                 valign: Gtk.Align.START }),
-                                 1, 1, 1, 1);
-        this._placeHolder.show_all();
+        let stackPopover = builder.get_object('popover-stack');
 
         this.model = model;
-        this._rowInsertedId = model.connect('row-inserted', Lang.bind(this, this._updateEmpty));
-        this._rowDeletedId = model.connect('row-deleted', Lang.bind(this, this._updateEmpty));
+        this.model.connect('no-locations', Lang.bind(this, function(model, empty) {
+            if (empty) {
+                stackPopover.set_visible_child_name("search-grid");
+            } else {
+                stackPopover.set_visible_child_name("locations-grid");
+            }
+        }));
 
-        let [ok, ] = model.get_iter_first();
-        if (ok)
-            this.add(this.iconView);
-        else
-            this.add(this._placeHolder);
-        this._empty = !ok;
+        let listbox = builder.get_object('locations-list-box');
 
-        this.connect('destroy', Lang.bind(this, this._onDestroy));
+        let initialGridLocEntry = builder.get_object('initial-grid-location-entry');
+        initialGridLocEntry.connect('notify::location', Lang.bind(this, function(entry) {
+            this._locationChanged(entry, listbox);
+        }));
+
+        let locationEntry = builder.get_object('location-entry');
+        locationEntry.connect('notify::location', Lang.bind(this, function(entry) {
+            this._locationChanged(entry, listbox)
+        }));
+
+        this.model.fillListbox(listbox);
+
+        this.connect('notify::visible', Lang.bind(this, function() {
+            listbox.set_selection_mode(0);
+            locationEntry.grab_focus();
+            listbox.set_selection_mode(1);
+        }));
+
+        let autoLocSwitch = builder.get_object('auto-location-switch');
+
+        let handlerId = autoLocSwitch.connect('notify::active', Lang.bind(this, function() {
+                            if (!autoLocSwitch.get_active()) {
+                                this.model.showRecent(listbox);
+                            }
+                            else {
+                                model.showCurrentLocation();
+                            }
+                            this.hide();
+                        }));
+
+        autoLocSwitch.set_sensitive(false);
+
+        listbox.connect('row-activated', Lang.bind(this, function(listbox, row) {
+            this.hide();
+            this.model.rowActivated(listbox, row);
+            GObject.signal_handler_block(autoLocSwitch, handlerId);
+            autoLocSwitch.set_active(false);
+            GObject.signal_handler_unblock(autoLocSwitch, handlerId);
+        }));
+
+        this.model.connect('current-location-changed', Lang.bind(this, function(model, active) {
+            autoLocSwitch.set_sensitive(true);
+            GObject.signal_handler_block(autoLocSwitch, handlerId);
+            autoLocSwitch.set_active(active);
+            GObject.signal_handler_unblock(autoLocSwitch, handlerId);
+        }));
+
+        this.iconView = new WorldIconView({ model: model, visible: true });
+    },
+
+    _locationChanged: function(entry, listbox) {
+        this.model.addNewLocation(entry, listbox);
     },
 
     get empty() {

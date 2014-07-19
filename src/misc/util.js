@@ -29,6 +29,7 @@ const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
 const Gtk = imports.gi.Gtk;
 const System = imports.system;
+const GWeather = imports.gi.GWeather;
 
 const Params = imports.misc.params;
 
@@ -150,4 +151,27 @@ function normalizeCasefoldAndUnaccent(str) {
 function assertEqual(one, two) {
     if (one != two)
         throw Error('Assertion failed: ' + one + ' != ' + two);
+}
+
+function getTemperature(info) {
+    let [ok1, ] = info.get_value_temp_min(GWeather.TemperatureUnit.DEFAULT);
+    let [ok2, ] = info.get_value_temp_max(GWeather.TemperatureUnit.DEFAULT);
+
+    if (ok1 && ok2) {
+        // TRANSLATORS: this is the temperature string, minimum and maximum.
+        // The two values are already formatted, so it would be something like
+        // "7 °C / 19 °C"
+        return _("%s / %s").format(info.get_temp_min(), info.get_temp_max());
+    } else {
+        return info.get_temp_summary();
+    }
+}
+
+function getEnabledProviders() {
+    let provider_override = GLib.getenv('GWEATHER_DEBUG_BACKEND');
+    if (provider_override) {
+        return (GWeather.Provider.METAR | GWeather.Provider[provider_override]);
+    } else {
+        return (GWeather.Provider.METAR | GWeather.Provider.YR_NO | GWeather.Provider.OWM);
+    }
 }

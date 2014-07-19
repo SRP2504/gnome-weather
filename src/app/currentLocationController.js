@@ -23,6 +23,8 @@ const Lang = imports.lang;
 const GWeather = imports.gi.GWeather;
 const Geocode = imports.gi.GeocodeGlib;
 
+const Util = imports.misc.util;
+
 const ManagerInterface = '<node> \
 <interface name="org.freedesktop.GeoClue2.Manager"> \
     <method name="GetClient"> \
@@ -70,6 +72,7 @@ const CurrentLocationController = new Lang.Class({
 
     _init: function(world) {
         this._world = world;
+        this._settings = Util.getSettings('org.gnome.Weather.Application');
         this._managerProxy = new ManagerProxy(Gio.DBus.system,
                                                "org.freedesktop.GeoClue2",
                                                "/org/freedesktop/GeoClue2/Manager");
@@ -118,6 +121,7 @@ const CurrentLocationController = new Lang.Class({
 
         this.currentLocation = GWeather.Location.get_world().find_nearest_city (location.latitude, location.longitude);
         this._addCurrentLocation();
+        this._settings.set_value('current-location', new GLib.Variant('mv', this.currentLocation.serialize()));
     },
 
     _addCurrentLocation: function() {

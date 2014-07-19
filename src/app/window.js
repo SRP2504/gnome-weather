@@ -94,6 +94,9 @@ const MainWindow = new Lang.Class({
         this._currentInfo = null;
         this._currentPage = Page.WORLD;
         this._pageWidgets = [[],[]];
+        this._settings = Util.getSettings('org.gnome.Weather.Application');
+
+        this._providers = Util.getEnabledProviders();
 
         Util.initActions(this,
                          [{ name: 'new-location',
@@ -127,11 +130,35 @@ const MainWindow = new Lang.Class({
         this._header.title = title;
         this._header.subtitle = subtitle;
 
+        this._worldView = new World.WorldContentView(this.application.model, { visible: true });
+        this._worldView.hide();
+        let iconView = this._worldView.iconView;
+
+        this._model = this._worldView.model;
+        this._model.connect('show-info', Lang.bind(this, function(model, info) {
+            this.showInfo(info);
+        }));
+        this._model.connect('no-cityview', Lang.bind(this, function() {
+            for (let i = 0; i < this._pageWidgets[Page.WORLD].length; i++)
+                this._pageWidgets[Page.WORLD][i].show_all();
+        }));
+
+        this._initialGrid = this._worldView.initialGrid;
+        this._pageWidgets[Page.WORLD].push(this._initialGrid);
+
         let newButton = builder.get_object('new-button');
         this._pageWidgets[Page.WORLD].push(newButton);
 
         let goWorldButton = builder.get_object('world-button');
         this._pageWidgets[Page.CITY].push(goWorldButton);
+
+        let goWorldButtonImage = builder.get_object('world-button-image');
+        goWorldButtonImage.icon_name = (goWorldButton.get_direction() == Gtk.TextDirection.RTL ?
+                                        'go-previous-rtl-symbolic' : 'go-previous-symbolic');
+
+        let placesButton = builder.get_object('places-button');
+
+        placesButton.set_popover(this._worldView);
 
         let select = builder.get_object('select-button');
         this._pageWidgets[Page.WORLD].push(select);
@@ -155,9 +182,7 @@ const MainWindow = new Lang.Class({
                                                 vexpand: true });
         this._stack.add(this._cityView);
 
-        this._worldView = new World.WorldContentView(this.application.model, { visible: true });
-        let iconView = this._worldView.iconView;
-        this._stack.add(this._worldView);
+        this._stack.add(this._initialGrid);
 
         iconView.connect('item-activated', Lang.bind(this, this._itemActivated));
 
@@ -188,7 +213,7 @@ const MainWindow = new Lang.Class({
                                       GObject.BindingFlags.SYNC_CREATE |
                                       GObject.BindingFlags.INVERT_BOOLEAN);
 
-        this._stack.set_visible_child(this._worldView);
+        this._stack.set_visible_child(this._initialGrid);
 
         iconView.connect('view-selection-changed', Lang.bind(this, function() {
             let items = iconView.get_selection();
@@ -214,6 +239,8 @@ const MainWindow = new Lang.Class({
 
         for (let i = 0; i < this._pageWidgets[Page.CITY].length; i++)
             this._pageWidgets[Page.CITY][i].hide();
+
+        this._model.fillCityView();
     },
 
     update: function() {
@@ -241,9 +268,6 @@ const MainWindow = new Lang.Class({
     },
 
     _goToPage: function(page) {
-        if (page == this._currentPage)
-            return;
-
         for (let i = 0; i < this._pageWidgets[this._currentPage].length; i++)
             this._pageWidgets[this._currentPage][i].hide();
 
@@ -275,7 +299,7 @@ const MainWindow = new Lang.Class({
     },
 
     _goWorld: function() {
-        this._stack.set_visible_child(this._worldView);
+        this._stack.set_visible_child(this._initialGrid);
         this._goToPage(Page.WORLD);
         this._cityView.disconnectClock();
     },

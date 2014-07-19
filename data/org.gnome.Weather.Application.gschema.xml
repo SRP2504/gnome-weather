@@ -8,5 +8,13 @@
         GVariant returned by gweather_location_serialize().
       </description>
     </key>
+    <key name="current-location" type="mv">
+    <default>nothing</default>
+      <summary>Current location</summary>
+      <description>
+        The current location shown on start-up of the application. Value is a
+        GVariant returned by gweather_location_serialize().
+      </description>
+    </key>
   </schema>
 </schemalist>
